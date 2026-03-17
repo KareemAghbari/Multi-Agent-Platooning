@@ -12,14 +12,11 @@ from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
 
 from MultiAgentPlatooningEnv import MultiAgentPlatooningEnv1
 
-#Plot for training over time (reward per epiosde)
-#Split data into training and testing 80/20
-#Plot for time headway
-#find average values for all testing trajectories
+# Change the reward calculation to calculat the rewards per agaent per episode and average them when you print out the mean during training
 
 N_AGENTS  = 6 #Number of agents
 NUM_ENVS  = 8 #Number of envs
-MAX_EPISODES = 12000 
+MAX_EPISODES = 10000 
 
 LOG_INTERVAL = 10 #Prints average stats every 10 episodes  
 
@@ -43,11 +40,11 @@ def make_env() -> MultiAgentPlatooningEnv1:
         num_agents=N_AGENTS,
         dt=0.1,
         desired_time_gap=1.5,
-        min_gap=4.0,
+        min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
-        a_max=1.5,
-        d_max=1.5,
+        a_max=3.0,
+        d_max=3.0,
         vehicle_length=5.0,
         render_mode=None,
         mode="train",
@@ -60,7 +57,7 @@ def make_test_env() -> MultiAgentPlatooningEnv1:
         num_agents=N_AGENTS,
         dt=0.1,
         desired_time_gap=1.5,
-        min_gap=4.0,
+        min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
         a_max=1.5,
@@ -307,7 +304,7 @@ def plot_results(
         ax.plot(ep_axis_raw, raw, alpha=0.15, color=col, linewidth=0.6)        # raw faint line
         ax.plot(ep_axis_sm,  smoothed, color=col, linewidth=1.4, label=a)      # smoothed bold line
     ax.set_xlabel("Episode")
-    ax.set_ylabel("Avg Reward per Episode")
+    ax.set_ylabel("Avg Reward per Timestep")
     ax.set_title(f"Per-Agent Training Reward over {MAX_EPISODES} Episodes (smoothed window={smooth_window})")
     ax.legend(loc="lower right", fontsize=7, ncol=2)
     ax.grid(alpha=0.3)
@@ -445,11 +442,13 @@ def main():
                 completed_episode_scores.append(float(scores[env_i]))
                 maddpg.scores.append(float(scores[env_i]))
 
+                steps_this_ep = max(int(env_step_counters[env_i]), 1)
                 for a in agent_ids:
-                    episode_agent_rewards[a].append(float(agent_scores[a][env_i]))
+                    #Use float(agent_scores[a][env_i] divide by env_step_counters[env_i] to get average reward per tiemstep and return the average reward
+                    episode_agent_rewards[a].append(float(agent_scores[a][env_i]) / steps_this_ep)
                     agent_scores[a][env_i] = 0.0
 
-                episode_steps.append(int(env_step_counters[env_i]))
+                episode_steps.append(steps_this_ep)
                 env_step_counters[env_i] = 0
                 scores[env_i]            = 0.0
                 reset_noise_idx.append(env_i)
