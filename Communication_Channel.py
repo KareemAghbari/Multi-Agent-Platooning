@@ -4,11 +4,8 @@ import numpy as np
 
 class ActionBuffer:
     # Implements the DAMARL delayed action queue for one agent.
-    # At every step the agent decides a new action which goes to the BACK of the
-    # queue. The action at the FRONT of the queue (decided k steps ago) is what
-    # actually gets executed in physics. This makes the delay learnable because
-    # the full queue is appended to the observation so the policy can see every
-    # committed-but-not-yet-executed action.
+    # At every step the agent decides a new action which goes to the BACK of the queue. The action at the FRONT of the queue (decided k steps ago) is what actually gets executed in physics. This makes the delay learnable because
+    # the full queue is appended to the observation so the policy can see every committed-but-not-yet-executed action.
 
     def __init__(self, delay_steps: int):
         self.k = max(int(delay_steps), 1)  # minimum 1 so deque is never empty
@@ -22,8 +19,7 @@ class ActionBuffer:
 
     def step(self, new_action: float) -> float:
         # Pushes the newly decided action onto the back of the queue.
-        # The deque maxlen automatically pops the front (oldest) element,
-        # which is the action that was decided k steps ago and executes now.
+        # The deque maxlen automatically pops the front (oldest) element, which is the action that was decided k steps ago and executes now.
         # We read the front BEFORE appending so we return the executing action.
         executing = float(self.queue[0])
         self.queue.append(new_action)
@@ -37,9 +33,7 @@ class ActionBuffer:
 
 class PacketLossChannel:
     # Simulates faulty V2V communication by randomly dropping observation packets.
-    # When a packet is dropped, the last successfully received observation is
-    # returned instead. Each agent has its own last-valid cache so a drop for
-    # one agent doesn't affect others.
+    # When a packet is dropped, the last successfully received observation is returned instead. Each agent has its own last-valid cache so a drop forone agent doesn't affect others.
     # Note: packet loss applies to the physical observation only (what the agent
     # sees about the world). The action queue is local to each agent and cannot
     # be lost.
@@ -55,13 +49,10 @@ class PacketLossChannel:
         self._last_valid_obs = {}
 
     def process(self, agent_id: str, obs: np.ndarray) -> np.ndarray:
-        # Either passes the observation through unchanged, or if a packet is
-        # lost, returns the last valid observation for that agent.
-        # On the very first step there is no cached obs, so the current one is
-        # always used regardless of loss probability.
+        # Either passes the observation through unchanged, or if a packet is lost, returns the last valid observation for that agent.
+        # On the very first step there is no cached obs, so the current one is always used regardless of loss probability.
         if self.loss_prob > 0.0 and self._rng.random() < self.loss_prob:
             if agent_id in self._last_valid_obs:
                 return self._last_valid_obs[agent_id]  # return stale obs
-        # packet received successfully — update cache and return current obs
         self._last_valid_obs[agent_id] = obs.copy()
         return obs
