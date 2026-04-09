@@ -12,14 +12,11 @@ from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
 
 from MultiAgentPlatooningEnv import MultiAgentPlatooningEnv1
 
-#Plot for training over time (reward per epiosde)
-#Split data into training and testing 80/20
-#Plot for time headway
-#find average values for all testing trajectories
+# Change the reward calculation to calculat the rewards per agaent per episode and average them when you print out the mean during training
 
 N_AGENTS  = 6 #Number of agents
 NUM_ENVS  = 8 #Number of envs
-MAX_EPISODES = 12000 
+MAX_EPISODES = 15000 
 
 LOG_INTERVAL = 10 #Prints average stats every 10 episodes  
 
@@ -36,14 +33,13 @@ def _suppress_fd_stdout():
         os.close(saved_fd)
         os.close(devnull_fd)
 
-#Using the saved env file, mode="train" so it only samples from the 80% training car IDs
-def make_env() -> MultiAgentPlatooningEnv1:
+def make_env(delay_steps=5) -> MultiAgentPlatooningEnv1:
     return MultiAgentPlatooningEnv1(
         trajectory_file="VehicleSpeeds(NOMOTORCYCLES).txt",
         num_agents=N_AGENTS,
         dt=0.1,
         desired_time_gap=1.5,
-        min_gap=4.0,
+        min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
         a_max=1.5,
@@ -51,16 +47,17 @@ def make_env() -> MultiAgentPlatooningEnv1:
         vehicle_length=5.0,
         render_mode=None,
         mode="train",
+        delay_steps=delay_steps, # Use the parameter passed to the function
     )
 
-#Same environment config but restricted to the 20% test car IDs so agents never saw these trajectories during training
-def make_test_env() -> MultiAgentPlatooningEnv1:
+# Update make_test_env to accept the delay_steps argument
+def make_test_env(delay_steps=5) -> MultiAgentPlatooningEnv1:
     return MultiAgentPlatooningEnv1(
         trajectory_file="VehicleSpeeds(NOMOTORCYCLES).txt",
         num_agents=N_AGENTS,
         dt=0.1,
         desired_time_gap=1.5,
-        min_gap=4.0,
+        min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
         a_max=1.5,
@@ -68,6 +65,7 @@ def make_test_env() -> MultiAgentPlatooningEnv1:
         vehicle_length=5.0,
         render_mode=None,
         mode="test",
+        delay_steps=delay_steps, # Use the parameter passed to the function
     )
 
 #This whole thing is requirede by AgileRL to convert NaN in termination/truncation so it doesnt crash
@@ -307,7 +305,7 @@ def plot_results(
         ax.plot(ep_axis_raw, raw, alpha=0.15, color=col, linewidth=0.6)        # raw faint line
         ax.plot(ep_axis_sm,  smoothed, color=col, linewidth=1.4, label=a)      # smoothed bold line
     ax.set_xlabel("Episode")
-    ax.set_ylabel("Avg Reward per Episode")
+    ax.set_ylabel("Avg Reward per Timestep")
     ax.set_title(f"Per-Agent Training Reward over {MAX_EPISODES} Episodes (smoothed window={smooth_window})")
     ax.legend(loc="lower right", fontsize=7, ncol=2)
     ax.grid(alpha=0.3)
@@ -324,7 +322,7 @@ def main():
     print(f"Using device: {device}") #Usually this selects to use my GPU
 
     env = AsyncPettingZooVecEnv(
-        [lambda _fn=make_env: _fn() for _ in range(NUM_ENVS)] #Creates a vectorized environment with 8 copies
+        [lambda _fn=make_env: _fn(delay_steps = 5) for _ in range(NUM_ENVS)] #Creates a vectorized environment with 8 copies
     )
     env.reset() #initializes all the environments 
 
@@ -367,8 +365,8 @@ def main():
     
 
     
-    learning_delay = 2_000 #wait until buffer has at least 2000 samples before it starts to learn
-    rollout_len    = 1_000 #number of steps to run before potentially resetting env
+    learning_delay = 10_000 #wait until buffer has at least 10000 samples before it starts to learn
+    rollout_len    = 10_000 #number of steps to run before potentially resetting env
 
     pbar = tqdm(total=MAX_EPISODES, desc="Episodes") #progress bar that updates when episode ends
     completed_episode_scores = []
@@ -436,7 +434,7 @@ def main():
             done_mat = np.array([done[a] for a in agent_ids]).T
             reset_noise_idx = []
 
-            for env_i, all_done in enumerate(done_mat.all(axis=1)):
+            for env_i, all_done in enumerate(done_mat.any(axis=1)):
                 if not all_done:
                     continue
 
@@ -445,11 +443,13 @@ def main():
                 completed_episode_scores.append(float(scores[env_i]))
                 maddpg.scores.append(float(scores[env_i]))
 
+                steps_this_ep = max(int(env_step_counters[env_i]), 1)
                 for a in agent_ids:
-                    episode_agent_rewards[a].append(float(agent_scores[a][env_i]))
+                    #Use float(agent_scores[a][env_i] divide by env_step_counters[env_i] to get average reward per tiemstep and return the average reward
+                    episode_agent_rewards[a].append(float(agent_scores[a][env_i]) / steps_this_ep)
                     agent_scores[a][env_i] = 0.0
 
-                episode_steps.append(int(env_step_counters[env_i]))
+                episode_steps.append(steps_this_ep)
                 env_step_counters[env_i] = 0
                 scores[env_i]            = 0.0
                 reset_noise_idx.append(env_i)
@@ -496,8 +496,8 @@ def main():
     print(f"Replay buffer size:       {memory.counter}")
 
 
-    maddpg.save_checkpoint("maddpg_platoon.pt")
-    print("Checkpoint saved: maddpg_platoon.pt")
+    maddpg.save_checkpoint("maddpg_delay_aware.pt")
+    print("Checkpoint saved: maddpg_delay_aware.pt")
 
     print("\nRunning evaluation episode for plotting (test trajectories)...")
     (rewards_ts, gaps_ts, speeds_ts, accels_ts,
@@ -513,7 +513,7 @@ def main():
 
     # Run multiple test episodes on unseen trajectories and report average reward per agent
     print("\nEvaluating on test trajectories (20 episodes)...")
-    test_rewards = run_test_evaluation(maddpg, make_test_env, n_episodes=20, max_steps=5000)
+    test_rewards = run_test_evaluation(maddpg, make_test_env(delay_steps = 5), n_episodes=20, max_steps=5000)
     print("\n── Test Evaluation Results (20 episodes, unseen trajectories) ──")
     for a, ep_rewards in test_rewards.items():
         valid = [r for r in ep_rewards if not np.isnan(r)]
