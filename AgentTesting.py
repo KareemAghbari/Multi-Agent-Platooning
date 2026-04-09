@@ -9,7 +9,7 @@ from MultiAgentPlatooningEnv import MultiAgentPlatooningEnv1
 
 
 N_AGENTS = 6
-CHECKPOINT_PATH = "maddpg_delay_aware.pt"
+CHECKPOINT_PATH = "maddpg_delay_aware4.pt"
 
 # Two scenarios runnable with the current 5-dim checkpoint.
 # delay_only and combined are commented out — they require retraining with
@@ -30,8 +30,7 @@ def make_test_env(delay_steps: int = 5, packet_loss_prob: float = 0.0) -> MultiA
         dt=0.1,
         desired_time_gap=1.5,
         min_gap=2.0,
-        max_gap=90.0,
-        v_max=30.0,
+        max_gap=90.0,        v_max=30.0,
         a_max=3.0,
         d_max=3.0,
         vehicle_length=5.0,

@@ -42,8 +42,8 @@ def make_env(delay_steps=5) -> MultiAgentPlatooningEnv1:
         min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
-        a_max=1.5,
-        d_max=1.5,
+        a_max=3.0,
+        d_max=3.0,
         vehicle_length=5.0,
         render_mode=None,
         mode="train",
@@ -60,8 +60,8 @@ def make_test_env(delay_steps=5) -> MultiAgentPlatooningEnv1:
         min_gap=2.0,
         max_gap=90.0,
         v_max=30.0,
-        a_max=1.5,
-        d_max=1.5,
+        a_max=3.0,
+        d_max=3.0,
         vehicle_length=5.0,
         render_mode=None,
         mode="test",
@@ -496,8 +496,8 @@ def main():
     print(f"Replay buffer size:       {memory.counter}")
 
 
-    maddpg.save_checkpoint("maddpg_delay_aware.pt")
-    print("Checkpoint saved: maddpg_delay_aware.pt")
+    maddpg.save_checkpoint("maddpg_delay_aware4.pt")
+    print("Checkpoint saved: maddpg_delay_aware4.pt")
 
     print("\nRunning evaluation episode for plotting (test trajectories)...")
     (rewards_ts, gaps_ts, speeds_ts, accels_ts,

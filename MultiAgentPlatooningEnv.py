@@ -24,8 +24,8 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         min_gap: float = 2.0,
         max_gap: float = 90.0,
         v_max: float = 30.0,
-        a_max: float = 1.5,
-        d_max: float = 1.5,
+        a_max: float = 3.0,
+        d_max: float = 3.0,
         vehicle_length: float = 5.0,
         render_mode: Optional[str] = None,
         seed: Optional[int] = None,
@@ -54,16 +54,16 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         self.agents: list[str] = []
 
         # Base 5-dim physical observation bounds
-        base_obs_low  = np.array([0.0,  0.0, -0.2, -1.0,  0.0], dtype=np.float32)
-        base_obs_high = np.array([1.0,  1.0,  1.0,  1.0,  2.0], dtype=np.float32)
+        base_obs_low  = np.array([0.0,  0.0, -0.2, -1.0,  0.0, -1.0], dtype=np.float32)
+        base_obs_high = np.array([1.0,  1.0,  1.0,  1.0,  2.0,  1.0], dtype=np.float32)
 
         # If delay is active, append k extra dims for the pending action queue.
         # Each pending action is normalised to [-1, 1] by dividing by a_max.
         # If delay_steps=0 the observation stays 5-dim and behaves exactly as before.
         if self.delay_steps > 0:
-            pending_low  = np.full(self.delay_steps, -1.0, dtype=np.float32)
+            pending_low  = np.full(self.delay_steps, -1.0, dtype=np.float32) #Creates arrays for the pending action queue
             pending_high = np.full(self.delay_steps,  1.0, dtype=np.float32)
-            obs_low  = np.concatenate([base_obs_low,  pending_low])
+            obs_low  = np.concatenate([base_obs_low,  pending_low]) #Adds the pending queue action observations to the observation space
             obs_high = np.concatenate([base_obs_high, pending_high])
         else:
             obs_low  = base_obs_low
@@ -165,6 +165,7 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         self.ego_vx  = np.zeros(n, dtype=np.float32)
         self.last_accels = np.zeros(n, dtype=np.float32)   # for external info
         self.prev_accels = np.zeros(n, dtype=np.float32)   # for jerk calculation
+        self.prev_front_vx = np.zeros(n, dtype=np.float32)
         self.steps:      int = 0
         self.traj_index: int = 0
         self.max_steps:  int = 0
@@ -201,8 +202,11 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         rel_v_norm  = float(np.clip((front_v - ego_v) / self.v_max, -1.0, 1.0))
         speed_ratio = float(np.clip(ego_v / max(front_v, 1e-3), 0.0, 2.0))
 
+        front_accel = (front_v - float(self.prev_front_vx[i])) / self.dt
+        front_accel_norm = float(np.clip(front_accel / self.a_max, -1.0, 1.0))
+
         return np.array(
-            [ego_v / self.v_max, front_v / self.v_max, dx_norm, rel_v_norm, speed_ratio],
+            [ego_v / self.v_max, front_v / self.v_max, dx_norm, rel_v_norm, speed_ratio, front_accel_norm],
             dtype=np.float32,
         )
 
@@ -219,55 +223,61 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         return np.concatenate([base_obs, pending_norm])
 
     def reward(self, i: int, accel: float) -> float:
-     
-        dx = self._dx(i)
-        if dx < self.min_gap_dist:
-            return -1.0
+        
+            dx = self._dx(i)
+            if dx < self.min_gap_dist:
+                return -1.0
 
-        r = 0.0
+            r = 0.0
 
-        # far_margin   = 10.0
+            # far_margin   = 10.0
 
-        # if dx < self.min_gap_dist + close_margin:
-        #     depth = 1.0 - (dx - self.min_gap_dist) / close_margin #Higher depth means more negative reward
-        #     r -= 0.8 * float(depth)
-        # elif dx > self.max_gap_dist - far_margin:
-        #     depth = (dx - (self.max_gap_dist - far_margin)) / far_margin #Same thing but if egos get too far behind
-        #     r -= 0.8 * float(depth)
-        # else:
-        #     r += 0.1  # survival bonus
+            # if dx < self.min_gap_dist + close_margin:
+            #     depth = 1.0 - (dx - self.min_gap_dist) / close_margin #Higher depth means more negative reward
+            #     r -= 0.8 * float(depth)
+            # elif dx > self.max_gap_dist - far_margin:
+            #     depth = (dx - (self.max_gap_dist - far_margin)) / far_margin #Same thing but if egos get too far behind
+            #     r -= 0.8 * float(depth)
+            # else:
+            #     r += 0.1  # survival bonus
 
-        #Time gap reward using gaussian equation
-        tg = self._time_gap(i)
-        r += 0.5 * float(np.exp(-((tg - self.desired_time_gap) / 0.5) ** 2))
+            #Soft proximity penalty that ramps up as gap approaches minimum safe distance
+            close_margin = 3.0
+            if dx < self.min_gap_dist + close_margin:
+                depth = 1.0 - (dx - self.min_gap_dist) / close_margin
+                r -= 0.3 * float(depth)
 
-        #If cars are far apart, negative reward for any speed matching since the egos wont learn to get to a closer distance
-        desired_gap_dist = self.desired_time_gap * max(float(self.ego_vx[i]), 1e-3)
-        if dx > desired_gap_dist * 1.5:
-            ego_v   = float(self.ego_vx[i])
-            front_v = self._front_v(i)
-            speed_error = abs(ego_v - front_v) / self.v_max
-            r -= 0.3 * float(speed_error)
+            #Time gap reward using gaussian equation
+            tg = self._time_gap(i)
+            r += 0.5 * float(np.exp(-((tg - self.desired_time_gap) / 1.0) ** 2))
 
-        #Abrput accelerations or decelerations give penalty
-        r -= 0.05 * (accel ** 2)
+            #If cars are far apart, negative reward for any speed matching since the egos wont learn to get to a closer distance
+            desired_gap_dist = self.desired_time_gap * max(float(self.ego_vx[i]), 1e-3)
+            if dx > desired_gap_dist * 1.2:
+                ego_v   = float(self.ego_vx[i])
+                front_v = self._front_v(i)
+                speed_error = abs(ego_v - front_v) / self.v_max
+                r -= 0.5 * float(speed_error)
+                gap_error = (dx - desired_gap_dist) / self.max_gap_dist
+                r -= 0.3 * float(gap_error)
 
-        #Jerk is the rate of change of acceleration, so if it changes too fast, negative reward penalty
-        if self.steps > 0:
-            jerk = (accel - self.prev_accels[i]) / self.dt
-            r -= 0.01 * (jerk ** 2)
+            #Abrput accelerations or decelerations give penalty
+            r -= 0.02 * (accel ** 2)
 
-        #Calculates time to collision (distance / relative velocity) negative reward for if ttc is smaller than the safe amount of 2 seconds
-        rel_v = self._rel_v(i)
-        if rel_v > 1e-3:
-            ttc = dx / rel_v
-            ttc_safe = self.desired_time_gap
-            if ttc < ttc_safe:
-                r -= 0.5 * (1.0 - ttc / ttc_safe)
-    
+            #Jerk is the rate of change of acceleration, so if it changes too fast, negative reward penalty
+            if self.steps > 0:
+                jerk = (accel - self.prev_accels[i]) / self.dt
+                r -= 0.001 * (jerk ** 2)
 
-        return float(np.clip(r, -1.0, 1.0))
+            #Calculates time to collision (distance / relative velocity) negative reward for if ttc is smaller than the safe amount of 2 seconds
+            rel_v = self._rel_v(i)
+            if rel_v < -1e-3:
+                ttc = dx / abs(rel_v)
+                ttc_safe = self.desired_time_gap
+                if ttc < ttc_safe:
+                    r -= 0.7 * (1.0 - ttc / ttc_safe)
 
+            return float(np.clip(r, -1.0, 1.0))
 
     #Converts any arrays or list into a plain float value
     @staticmethod
@@ -316,13 +326,16 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
         lead_v  = self.lead_vx  # save lead speed once so all egos initialise relative to the true lead, not compounding front_v
 
         for i in range(n):
-            base_gap  = self.desired_time_gap * front_v  #Ideal gap based on desired time headway multiplied by the front vehicles speed
+            base_gap  = self.desired_time_gap * lead_v  #Ideal gap based on desired time headway multiplied by the front vehicles speed
             variation = float(self._rng.uniform(0.6, 1.4))  #Random multiplier between 60% and 140% to give +/- 40% variation
             gap       = float(np.clip(base_gap * variation, self.min_gap_dist + 5.0, self.max_gap_dist))  #Clip to keep gap within valid env bounds
             self.ego_x[i]  = float(front_x - gap - self.vehicle_length) #Calculates bumper to bumper length to find posititon of each ego
-            self.ego_vx[i] = float(np.clip(lead_v * (0.85 + 0.15 * float(self._rng.random())), 0.0, lead_v)) #Randomly choose speed of each ego between 85 and 100% of lead vehicle speed so egos never start faster than lead
+            self.ego_vx[i] = float(np.clip(lead_v * (0.90 + 0.2 * float(self._rng.random())), 0.0, self.v_max)) #Randomly choose speed of each ego between 85 and 100% of lead vehicle speed so egos never start faster than lead
             front_x = float(self.ego_x[i]) #Updates front position and velocity to calculate poisition and velocity of ego behind it
             front_v = float(self.ego_vx[i])
+
+        for i in range(n):
+            self.prev_front_vx[i] = self._front_v(i)
 
         # Build observations: get raw physical obs, apply packet loss fallback,
         # then augment with pending action queue. At reset the queue is all zeros
@@ -344,6 +357,9 @@ class MultiAgentPlatooningEnv1(ParallelEnv):
             return {}, {}, {}, {}, {}
 
         n = self._n_agents
+
+        for i in range(n):
+            self.prev_front_vx[i] = self._front_v(i)
 
         # Advance lead first — traj_index increments before reading lead_speeds so
         # the lead_vx used in physics and reward() are consistent within this step
